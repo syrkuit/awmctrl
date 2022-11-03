@@ -1,63 +1,108 @@
 #! /usr/bin/python3
 import logging
+import os
 import re
 import subprocess
 import sys
 import time
+import yaml
 
 
 def get_geometry():
-    desktops = subprocess.check_output(('wmctrl', '-d'))
-    return tuple(int(x) for x in re.search(r'DG: (\d+)x(\d+)', desktops.decode(encoding='UTF-8')).groups())
-
-
-logging.basicConfig(level=logging.INFO, format='%(levelname).1s %(asctime).19s %(message)s')
-last = None
-positions = {}
-while True:
-    try:
-        geometry = get_geometry()
-        if last != geometry and geometry in positions:
-            move = True
-        else:
-            move = False
-        if last and last != geometry:
-            logging.info(f"new setup: {last} -> {geometry} move={move}")
-
-        new = {}
-        wp = subprocess.check_output(('wmctrl', '-lG'))
-        for window in wp.decode(encoding='UTF-8').splitlines():
-            m = re.match(r'(?P<wid>0x[0-9a-f]+) +(?P<did>-?\d+) '
-                         r'(?P<x>-?\d+)\s+(?P<y>-?\d+)\s+(?P<w>\d+)\s+(?P<h>\d+)\s+'
-                         r'\S+\s+(?P<name>.+)', window)
-            if m.group('did') == '-1': continue
-            if move:
-                # move the windows back to where they were
-                if m.group('wid') in positions[geometry]:
-                    did, pos = positions[geometry][m.group('wid')]
-                    if m.group('did') != did:
-                        subprocess.call(('wmctrl', '-i', '-r', m.group('wid'), '-t', did),
-                                        stdout=sys.stdout, stderr=sys.stderr)
-                    subprocess.call(('wmctrl', '-i', '-r', m.group('wid'), '-e', pos),
-                                    stdout=sys.stdout, stderr=sys.stderr)
-                else:
-                    logging.info(f"not moving new window '{m.group('name')}'")
-            else:
-                new[m.group('wid')] = (
-                    m.group('did'),
-                    ','.join(('0', m.group('x'), m.group('y'), m.group('w'), m.group('h'))))
-
-        now = get_geometry()
-        if now == geometry:
-            last = geometry
-            positions[last] = new
-        else:
-            logging.warning(f"geometry changed ({last} -> {now}) during {move=}, restarting update")
+    # This returns the current geometry, and will center the laptop display under the other one (if any)
+    #
+    # Clearly, there are a few assumptions here:
+    # - the laptop is situated under the other monitor
+    # - there is at most a single monitor in addition to the laptop
+    xrandr = subprocess.check_output(('xrandr', '--current'))
+    w, h = 0, 0
+    x, y = -1, -1
+    dx, dy = 0, 0
+    primary = None
+    for line in xrandr.decode(encoding='UTF-8').splitlines():
+        m = re.match(r'^(?P<name>\S+) connected (?P<pri>primary )?'
+                     r'(?:(?P<w>\d+)x(?P<h>\d+)\+(?P<x>\d+)\+(?P<y>\d+))',
+                     line)
+        if not m:
             continue
-    except Exception as e:
-        logging.error(f"error: {e}", exc_info=True)
-    then = time.time()
-    time.sleep(2)
-    now = time.time()
-    if now - then > 3:
-        logging.info(f"took a {now - then:.0f} second nap")
+        w = max(w, int(m.group('w')))
+        h += int(m.group('h'))
+        if m.group('pri'):
+            primary = m.group('name')
+            x = int(m.group('x'))
+            y = int(m.group('y'))
+            dx -= int(m.group('w'))
+        else:
+            dx += int(m.group('w'))
+            dy = int(m.group('h'))
+    dx = dx // 2
+    if dy and (dx != x or dy != y):
+        logging.info(f"centering primary display: {(x, y)} -> {(dx, dy)}")
+        subprocess.call(('xrandr', '--output', primary, '--pos', f"{dx}x{dy}"),
+                        stdout=sys.stdout, stderr=sys.stderr)
+    return w, h
+
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO, format='%(levelname).1s %(asctime).19s %(message)s')
+    config_path = os.path.join(os.environ['HOME'], '.awmctrl')
+    last = None
+    config = None
+    positions = {}
+    while True:
+        try:
+            config = yaml.load(open(config_path, 'r'), Loader=yaml.SafeLoader)
+        except Exception as e:
+            if config is None:
+                raise e
+            logging.warning(f"invalid configuration: {e}", exc_info=True)
+
+        try:
+            geometry = get_geometry()
+            if last != geometry and geometry in positions:
+                move = True
+            else:
+                move = False
+            if last != geometry:
+                if last:
+                    logging.info(f"new setup: {last} -> {geometry} move={move}")
+                else:
+                    logging.info(f"initial setup: {geometry}")
+
+            new = {}
+            wp = subprocess.check_output(('wmctrl', '-lG'))
+            for window in wp.decode(encoding='UTF-8').splitlines():
+                m = re.match(r'(?P<wid>0x[0-9a-f]+) +(?P<did>-?\d+) '
+                             r'(?P<x>-?\d+)\s+(?P<y>-?\d+)\s+(?P<w>\d+)\s+(?P<h>\d+)\s+'
+                             r'\S+\s+(?P<name>.+)', window)
+                if m.group('did') == '-1': continue
+                if move:
+                    # move the windows back to where they were
+                    if m.group('wid') in positions[geometry]:
+                        did, pos = positions[geometry][m.group('wid')]
+                        if m.group('did') != did:
+                            subprocess.call(('wmctrl', '-i', '-r', m.group('wid'), '-t', did),
+                                            stdout=sys.stdout, stderr=sys.stderr)
+                        subprocess.call(('wmctrl', '-i', '-r', m.group('wid'), '-e', pos),
+                                        stdout=sys.stdout, stderr=sys.stderr)
+                    else:
+                        logging.info(f"not moving new window '{m.group('name')}'")
+                else:
+                    new[m.group('wid')] = (
+                        m.group('did'),
+                        ','.join(('0', m.group('x'), m.group('y'), m.group('w'), m.group('h'))))
+
+            now = get_geometry()
+            if now == geometry:
+                last = geometry
+                positions[last] = new
+            else:
+                logging.warning(f"geometry changed ({last} -> {now}) during {move=}, restarting update")
+                continue
+        except Exception as e:
+            logging.error(f"error: {e}", exc_info=True)
+        then = time.time()
+        time.sleep(2)
+        now = time.time()
+        if now - then > 3:
+            logging.info(f"took a {now - then:.0f} second nap")

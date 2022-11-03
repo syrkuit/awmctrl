@@ -1,0 +1,63 @@
+#! /usr/bin/python3
+import logging
+import re
+import subprocess
+import sys
+import time
+
+
+def get_geometry():
+    desktops = subprocess.check_output(('wmctrl', '-d'))
+    return tuple(int(x) for x in re.search(r'DG: (\d+)x(\d+)', desktops.decode(encoding='UTF-8')).groups())
+
+
+logging.basicConfig(level=logging.INFO, format='%(levelname).1s %(asctime).19s %(message)s')
+last = None
+positions = {}
+while True:
+    try:
+        geometry = get_geometry()
+        if last != geometry and geometry in positions:
+            move = True
+        else:
+            move = False
+        if last and last != geometry:
+            logging.info(f"new setup: {last} -> {geometry} move={move}")
+
+        new = {}
+        wp = subprocess.check_output(('wmctrl', '-lG'))
+        for window in wp.decode(encoding='UTF-8').splitlines():
+            m = re.match(r'(?P<wid>0x[0-9a-f]+) +(?P<did>-?\d+) '
+                         r'(?P<x>-?\d+)\s+(?P<y>-?\d+)\s+(?P<w>\d+)\s+(?P<h>\d+)\s+'
+                         r'\S+\s+(?P<name>.+)', window)
+            if m.group('did') == '-1': continue
+            if move:
+                # move the windows back to where they were
+                if m.group('wid') in positions[geometry]:
+                    did, pos = positions[geometry][m.group('wid')]
+                    if m.group('did') != did:
+                        subprocess.call(('wmctrl', '-i', '-r', m.group('wid'), '-t', did),
+                                        stdout=sys.stdout, stderr=sys.stderr)
+                    subprocess.call(('wmctrl', '-i', '-r', m.group('wid'), '-e', pos),
+                                    stdout=sys.stdout, stderr=sys.stderr)
+                else:
+                    logging.info(f"not moving new window '{m.group('name')}'")
+            else:
+                new[m.group('wid')] = (
+                    m.group('did'),
+                    ','.join(('0', m.group('x'), m.group('y'), m.group('w'), m.group('h'))))
+
+        now = get_geometry()
+        if now == geometry:
+            last = geometry
+            positions[last] = new
+        else:
+            logging.warning(f"geometry changed ({last} -> {now}) during {move=}, restarting update")
+            continue
+    except Exception as e:
+        logging.error(f"error: {e}", exc_info=True)
+    then = time.time()
+    time.sleep(2)
+    now = time.time()
+    if now - then > 3:
+        logging.info(f"took a {now - then:.0f} second nap")

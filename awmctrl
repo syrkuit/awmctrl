@@ -56,19 +56,18 @@ def get_geometry():
 
 def get_config():
     config = yaml.load(open(config_path, 'r'), Loader=yaml.SafeLoader)
-    for setup in ('single', 'multi'):
-        rules = config.get(setup, {}).get('rules', [])
-        for i in range(len(rules)):
-            rules[i]['title'] = re.compile(rules[i]['title'])
-            if 'screen' in rules[i]:
-                rules[i]['screen'] = f"{rules[i]['screen']}"
-            if 'geometry' in rules[i]:
-                m = re.match('(?:(?P<w>\d+)x(?P<h>\d+))?(?:(?P<x>[+-]\d+)(?P<y>[+-]\d+))?',
-                             rules[i]['geometry'])
-                if not m:
-                    raise ValueError(f"invalid geometry: {rules[i]['geometry']}")
-                rules[i]['geometry'] = Display(geometry=Geometry(w=m.group('w'), h=m.group('h')),
-                                               position=Position(x=m.group('x'), y=m.group('y')))
+    rules = config.get('rules', [])
+    for i in range(len(rules)):
+        rules[i]['title'] = re.compile(rules[i]['title'])
+        if 'desktop' in rules[i]:
+            rules[i]['desktop'] = str(rules[i]['desktop'])
+        if 'geometry' in rules[i]:
+            m = re.match('(?:(?P<w>\d+)x(?P<h>\d+))?(?:(?P<x>[+-]\d+)(?P<y>[+-]\d+))?',
+                         rules[i]['geometry'])
+            if not m:
+                raise ValueError(f"invalid geometry: {rules[i]['geometry']}")
+            rules[i]['geometry'] = Display(geometry=Geometry(w=m.group('w'), h=m.group('h')),
+                                           position=Position(x=m.group('x'), y=m.group('y')))
     return config
 
 
@@ -123,37 +122,18 @@ if __name__ == '__main__':
 
             if geometry not in positions:
                 logging.info('applying configured rules')
-                if len(displays) == 1:
-                    rules = config.get('single', {}).get('rules', [])
-                else:
-                    rules = config.get('multi', {}).get('rules', [])
+                rules = config.get('rules', [])
                 for wid, window in new.items():
                     for rule in rules:
                         if rule.get('when', str(geometry)) != str(geometry):
                             continue
                         if not rule['title'].search(window.title):
                             continue
-                        if window.did != rule.get('screen', window.did):
-                            logging.info(f"moving '{window.title}' to screen {rule['screen']}")
-                            subprocess.call(('wmctrl', '-i', '-r', wid, '-t', rule['screen']),
+                        if window.did != rule.get('desktop', window.did):
+                            logging.info(f"moving '{window.title}' to desktop {rule['desktop']}")
+                            subprocess.call(('wmctrl', '-i', '-r', wid, '-t', rule['desktop']),
                                             stdout=sys.stdout, stderr=sys.stderr)
-                        if display := displays.get(rule.get('maximize')):
-                            x, y = display.position.x, display.position.y
-                            w, h = display.geometry.w, display.geometry.h
-                            if rule['maximize'] == 'laptop':
-                                y += 14  # shouldn't be hard coded, but I'm lazy
-                                h -= 14
-                            if window.title.endswith('Google Chrome'):
-                                # Chrome window weirdness
-                                x -= 16
-                                w += 32
-                                h += 32
-                            mvarg = ','.join(map(lambda x: str(x), ('0', x, y, w, h)))
-                            if mvarg != window.geometry:
-                                logging.info(f"maximizing '{window.title}' on {rule['maximize']}")
-                                subprocess.call(('wmctrl', '-i', '-r', wid, '-e', mvarg),
-                                                stdout=sys.stdout, stderr=sys.stderr)
-                        elif (spec := rule.get('geometry')) \
+                        if (spec := rule.get('geometry')) \
                              and (display := displays.get(rule.get('display'))):
                             w, h = map(lambda x: int(x), window.geometry.split(',')[-2:])
                             if spec.geometry.w:

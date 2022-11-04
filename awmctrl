@@ -1,7 +1,6 @@
 #! /usr/bin/python3
 import collections
 import logging
-import os
 import re
 import subprocess
 import sys
@@ -48,13 +47,16 @@ def get_geometry():
             logging.info(f"centering primary display: {(x, y)} -> {(dx, dy)}")
             subprocess.call(('xrandr', '--output', primary, '--pos', f"{dx}x{dy}"),
                             stdout=sys.stdout, stderr=sys.stderr)
-    if 'monitor' in displays:
         return Geometry(w=displays['monitor'].geometry.w,
                         h=sum(map(lambda x: x.geometry.h, displays.values()))), displays
     else:
-        return displays['laptop'], displays
+        # display position isn't updated right away somehow?
+        name = list(displays.keys())[0]
+        displays[name] = Display(geometry=displays[name].geometry,
+                                 position=Position(x=0, y=0))
+        return displays['laptop'].geometry, displays
 
-def get_config():
+def get_config(config_path):
     config = yaml.load(open(config_path, 'r'), Loader=yaml.SafeLoader)
     rules = config.get('rules', [])
     for i in range(len(rules)):
@@ -70,16 +72,13 @@ def get_config():
                                            position=Position(x=m.group('x'), y=m.group('y')))
     return config
 
-
-if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO, format='%(levelname).1s %(asctime).19s %(message)s')
-    config_path = os.path.join(os.environ['HOME'], '.awmctrl')
+def main(config_path, once):
     last = None
     config = None
     positions = {}
     while True:
         try:
-            config = get_config()
+            config = get_config(config_path)
         except Exception as e:
             if config is None:
                 raise e
@@ -96,6 +95,7 @@ if __name__ == '__main__':
                     logging.info(f"new setup: {last} -> {geometry} {move=}")
                 else:
                     logging.info(f"initial setup: {geometry}")
+                logging.debug(f"displays: {displays}")
 
             new = {}
             wp = subprocess.check_output(('wmctrl', '-lG'))
@@ -104,21 +104,25 @@ if __name__ == '__main__':
                              r'(?P<x>-?\d+)\s+(?P<y>-?\d+)\s+(?P<w>\d+)\s+(?P<h>\d+)\s+'
                              r'\S+\s+(?P<title>.+)', window)
                 if m.group('did') == '-1': continue
+                wgeometry = ','.join(('0', m.group('x'), m.group('y'), m.group('w'), m.group('h')))
                 if move:
                     # move the windows back to where they were
                     if m.group('wid') in positions[geometry]:
                         window = positions[geometry][m.group('wid')]
                         if m.group('did') != window.did:
+                            logging.debug(f"moving window '{m.group('title')}' to desktop {window.did}")
                             subprocess.call(('wmctrl', '-i', '-r', m.group('wid'), '-t', window.did),
                                             stdout=sys.stdout, stderr=sys.stderr)
-                        subprocess.call(('wmctrl', '-i', '-r', m.group('wid'), '-e', window.geometry),
-                                        stdout=sys.stdout, stderr=sys.stderr)
+                        if window.geometry != wgeometry:
+                            logging.debug(f"moving window '{m.group('title')}' from {wgeometry} to {window.geometry}")
+                            subprocess.call(('wmctrl', '-i', '-r', m.group('wid'), '-e', window.geometry),
+                                            stdout=sys.stdout, stderr=sys.stderr)
                     else:
                         logging.info(f"not moving new window '{m.group('title')}'")
                 else:
                     new[m.group('wid')] = Window(did=m.group('did'),
                                                  title=m.group('title'),
-                                                 geometry=','.join(('0', m.group('x'), m.group('y'), m.group('w'), m.group('h'))))
+                                                 geometry=wgeometry)
 
             if geometry not in positions:
                 logging.info('applying configured rules')
@@ -129,6 +133,7 @@ if __name__ == '__main__':
                             continue
                         if not rule['title'].search(window.title):
                             continue
+                        logging.debug(f"window '{window.title}' matches rule {rule}")
                         if window.did != rule.get('desktop', window.did):
                             logging.info(f"moving '{window.title}' to desktop {rule['desktop']}")
                             subprocess.call(('wmctrl', '-i', '-r', wid, '-t', rule['desktop']),
@@ -138,6 +143,9 @@ if __name__ == '__main__':
                             w, h = map(lambda x: int(x), window.geometry.split(',')[-2:])
                             if spec.geometry.w:
                                 w, h = int(spec.geometry.w), int(spec.geometry.h)
+                            if window.title.endswith('Google Chrome'):
+                                w += 32
+                                h += 32
                             if spec.position.x:
                                 x = display.position.x + int(spec.position.x)
                                 y = display.position.y + int(spec.position.y)
@@ -154,9 +162,6 @@ if __name__ == '__main__':
                                     if window.title.endswith('Google Chrome'):
                                         # Chrome window weirdness
                                         y += 32
-                                elif window.title.endswith('Google Chrome'):
-                                    # Chrome window weirdness
-                                    y -= 16
                             else:
                                 x, y = map(lambda x: int(x), window.geometry.split(',')[1:3])
                             mvarg = ','.join(map(lambda x: str(x), ('0', x, y, w, h)))
@@ -175,8 +180,42 @@ if __name__ == '__main__':
                 continue
         except Exception as e:
             logging.error(f"error: {e}", exc_info=True)
+        if once:
+            return
         then = time.time()
         time.sleep(2)
         now = time.time()
         if now - then > 3:
             logging.info(f"took a {now - then:.0f} second nap")
+
+if __name__ == '__main__':
+    from optparse import OptionParser
+    import os
+
+    op = OptionParser(usage='%prog [ <options> ]')
+    op.add_option('-q', dest='quiet', action='store_true', default=False,
+                  help='Less verbose logging')
+    op.add_option('-v', dest='verbose', action='store_true', default=False,
+                  help='More verbose logging')
+    op.add_option('-c', dest='config', action='store',
+                  default=os.path.join(os.environ['HOME'], '.awmctrl'),
+                  help='Configuration file')
+    op.add_option('-C', dest='check', action='store_true', default=False,
+                  help='Validate configuration and exit')
+    op.add_option('-1', dest='once', action='store_true', default=None,
+                  help='Apply rules once and exit')
+    options, args = op.parse_args()
+    if options.quiet and options.verbose:
+        op.error('can be quiet or verbose, pick one!')
+    if options.check and options.once:
+        op.error('can validate config or run once, pick one!')
+
+    logging.basicConfig(level=logging.DEBUG if options.verbose
+                        else logging.ERROR if options.quiet else logging.INFO,
+                        format='%(levelname).1s %(asctime).19s %(message)s')
+    if options.check:
+        get_config(options.config)
+        sys.exit(0)
+
+    main(options.config, options.once)
+    sys.exit(0)

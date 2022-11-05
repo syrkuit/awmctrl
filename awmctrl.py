@@ -79,6 +79,8 @@ def awmctrl(config_path, once):
     while True:
         try:
             config = get_config(config_path)
+        except FileNotFoundError:
+            config = {}
         except Exception as e:
             if config is None:
                 raise e
@@ -124,7 +126,7 @@ def awmctrl(config_path, once):
                                                  title=m.group('title'),
                                                  geometry=wgeometry)
 
-            if geometry not in positions:
+            if geometry not in positions and config:
                 logging.info('applying configured rules')
                 rules = config.get('rules', [])
                 for wid, window in new.items():
@@ -139,7 +141,7 @@ def awmctrl(config_path, once):
                             subprocess.call(('wmctrl', '-i', '-r', wid, '-t', rule['desktop']),
                                             stdout=sys.stdout, stderr=sys.stderr)
                         if (spec := rule.get('geometry')) \
-                             and (display := displays.get(rule.get('display'))):
+                             and (display := displays.get(rule.get('display', 'laptop'))):
                             w, h = map(lambda x: int(x), window.geometry.split(',')[-2:])
                             if spec.geometry.w:
                                 w, h = int(spec.geometry.w), int(spec.geometry.h)
@@ -219,3 +221,7 @@ def main():
 
     awmctrl(options.config, options.once)
     sys.exit(0)
+
+
+if __name__ == '__main__':
+    main()

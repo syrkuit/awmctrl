@@ -72,7 +72,7 @@ def get_config(config_path):
                                            position=Position(x=m.group('x'), y=m.group('y')))
     return config
 
-def main(config_path, once):
+def awmctrl(config_path, once):
     last = None
     config = None
     positions = {}
@@ -188,22 +188,22 @@ def main(config_path, once):
         if now - then > 3:
             logging.info(f"took a {now - then:.0f} second nap")
 
-if __name__ == '__main__':
+def main():
     from optparse import OptionParser
     import os
 
     op = OptionParser(usage='%prog [ <options> ]')
-    op.add_option('-q', dest='quiet', action='store_true', default=False,
-                  help='Less verbose logging')
-    op.add_option('-v', dest='verbose', action='store_true', default=False,
-                  help='More verbose logging')
+    op.add_option('-1', dest='once', action='store_true', default=None,
+                  help='Apply rules once and exit')
     op.add_option('-c', dest='config', action='store',
                   default=os.path.join(os.environ['HOME'], '.awmctrl'),
                   help='Configuration file')
     op.add_option('-C', dest='check', action='store_true', default=False,
                   help='Validate configuration and exit')
-    op.add_option('-1', dest='once', action='store_true', default=None,
-                  help='Apply rules once and exit')
+    op.add_option('-q', dest='quiet', action='store_true', default=False,
+                  help='Less verbose logging')
+    op.add_option('-v', dest='verbose', action='store_true', default=False,
+                  help='More verbose logging')
     options, args = op.parse_args()
     if options.quiet and options.verbose:
         op.error('can be quiet or verbose, pick one!')
@@ -217,5 +217,5 @@ if __name__ == '__main__':
         get_config(options.config)
         sys.exit(0)
 
-    main(options.config, options.once)
+    awmctrl(options.config, options.once)
     sys.exit(0)

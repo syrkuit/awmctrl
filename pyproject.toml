@@ -1,0 +1,29 @@
+[build-system]
+requires = ['setuptools']
+build-backend = "setuptools.build_meta"
+
+[project]
+name = 'awmctrl'
+version = '0.1'
+description = 'Automatically arrange windows based on desktop configuration'
+license = {text = 'MIT'}
+authors = [
+    {name = 'Christophe Kalt', email = 'ck@taranis.org'}
+]
+classifiers = [
+'Development Status :: 4 - Beta',
+'License :: OSI Approved :: MIT License',
+'Intended Audience :: End Users/Desktop',
+'Programming Language :: Python :: 3',
+'Programming Language :: Python :: 3 :: Only',
+'Topic :: Desktop Environment',
+'Topic :: Utilities'
+]
+requires-python = '>=3.1, <4'
+dependencies = ['PyYAML']
+
+[project.scripts]
+awmctrl = 'awmctrl:main'
+
+[project.urls]
+Source = 'https://github.com/syrkuit/awmctrl'

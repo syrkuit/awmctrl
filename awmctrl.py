@@ -72,6 +72,50 @@ def get_config(config_path):
                                            position=Position(x=m.group('x'), y=m.group('y')))
     return config
 
+def rule_window(wid, window, geometry, displays, rules):
+    for rule in rules:
+        if str(geometry) not in rule.get('when', [str(geometry)]):
+            continue
+        if not rule['title'].search(window.title):
+            continue
+        logging.debug(f"window '{window.title}' matches rule {rule}")
+        if window.did != rule.get('desktop', window.did):
+            logging.info(f"moving '{window.title}' to desktop {rule['desktop']}")
+            subprocess.call(('wmctrl', '-i', '-r', wid, '-t', rule['desktop']),
+                            stdout=sys.stdout, stderr=sys.stderr)
+        if (spec := rule.get('geometry')) \
+             and (display := displays.get(rule.get('display', 'laptop'))):
+            w, h = map(lambda x: int(x), window.geometry.split(',')[-2:])
+            if spec.geometry.w:
+                w, h = int(spec.geometry.w), int(spec.geometry.h)
+            if window.title.endswith('Google Chrome'):
+                w += 32
+                h += 32
+            if spec.position.x:
+                x = display.position.x + int(spec.position.x)
+                y = display.position.y + int(spec.position.y)
+                if spec.position.x[0] == '-':
+                    x += display.geometry.w - w
+                    if window.title.endswith('Google Chrome'):
+                        # Chrome window weirdness
+                        x += 32
+                elif window.title.endswith('Google Chrome'):
+                    # Chrome window weirdness
+                    x -= 16
+                if spec.position.y[0] == '-':
+                    y += display.geometry.h - h
+                    if window.title.endswith('Google Chrome'):
+                        # Chrome window weirdness
+                        y += 32
+            else:
+                x, y = map(lambda x: int(x), window.geometry.split(',')[1:3])
+            mvarg = ','.join(map(lambda x: str(x), ('0', x, y, w, h)))
+            if mvarg != window.geometry:
+                logging.info(f"moving '{window.title}' on {rule['display']} from {window.geometry[2:]} to {mvarg[2:]}")
+                subprocess.call(('wmctrl', '-i', '-r', wid, '-e', mvarg),
+                                stdout=sys.stdout, stderr=sys.stderr)
+        return
+
 def awmctrl(config_path, once):
     last = None
     config = None
@@ -120,7 +164,10 @@ def awmctrl(config_path, once):
                             subprocess.call(('wmctrl', '-i', '-r', m.group('wid'), '-e', window.geometry),
                                             stdout=sys.stdout, stderr=sys.stderr)
                     else:
-                        logging.info(f"not moving new window '{m.group('title')}'")
+                        logging.info(f"applying configured rules to new window '{m.group('title')}'")
+                        rule_window(m.group('wid'),
+                                    Window(did=m.group('did'), title=m.group('title'), geometry=wgeometry),
+                                    geometry, displays, config.get('rules', []))
                 else:
                     new[m.group('wid')] = Window(did=m.group('did'),
                                                  title=m.group('title'),
@@ -128,50 +175,8 @@ def awmctrl(config_path, once):
 
             if geometry not in positions and config:
                 logging.info('applying configured rules')
-                rules = config.get('rules', [])
                 for wid, window in new.items():
-                    for rule in rules:
-                        if rule.get('when', str(geometry)) != str(geometry):
-                            continue
-                        if not rule['title'].search(window.title):
-                            continue
-                        logging.debug(f"window '{window.title}' matches rule {rule}")
-                        if window.did != rule.get('desktop', window.did):
-                            logging.info(f"moving '{window.title}' to desktop {rule['desktop']}")
-                            subprocess.call(('wmctrl', '-i', '-r', wid, '-t', rule['desktop']),
-                                            stdout=sys.stdout, stderr=sys.stderr)
-                        if (spec := rule.get('geometry')) \
-                             and (display := displays.get(rule.get('display', 'laptop'))):
-                            w, h = map(lambda x: int(x), window.geometry.split(',')[-2:])
-                            if spec.geometry.w:
-                                w, h = int(spec.geometry.w), int(spec.geometry.h)
-                            if window.title.endswith('Google Chrome'):
-                                w += 32
-                                h += 32
-                            if spec.position.x:
-                                x = display.position.x + int(spec.position.x)
-                                y = display.position.y + int(spec.position.y)
-                                if spec.position.x[0] == '-':
-                                    x += display.geometry.w - w
-                                    if window.title.endswith('Google Chrome'):
-                                        # Chrome window weirdness
-                                        x += 32
-                                elif window.title.endswith('Google Chrome'):
-                                    # Chrome window weirdness
-                                    x -= 16
-                                if spec.position.y[0] == '-':
-                                    y += display.geometry.h - h
-                                    if window.title.endswith('Google Chrome'):
-                                        # Chrome window weirdness
-                                        y += 32
-                            else:
-                                x, y = map(lambda x: int(x), window.geometry.split(',')[1:3])
-                            mvarg = ','.join(map(lambda x: str(x), ('0', x, y, w, h)))
-                            if mvarg != window.geometry:
-                                logging.info(f"moving '{window.title}' on {rule['display']} from {window.geometry[2:]} to {mvarg[2:]}")
-                                subprocess.call(('wmctrl', '-i', '-r', wid, '-e', mvarg),
-                                                stdout=sys.stdout, stderr=sys.stderr)
-                        break
+                    rule_window(wid, window, geometry, displays, config.get('rules', []))
 
             now, _ = get_geometry()
             if now == geometry:

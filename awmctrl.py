@@ -61,6 +61,8 @@ def get_config(config_path):
     rules = config.get('rules', [])
     for i in range(len(rules)):
         rules[i]['title'] = re.compile(rules[i]['title'])
+        if isinstance(rules[i].get('when'), str):
+            rules[i]['when'] = (rules[i]['when'])
         if 'desktop' in rules[i]:
             rules[i]['desktop'] = str(rules[i]['desktop'])
         if 'geometry' in rules[i]:

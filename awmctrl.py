@@ -15,7 +15,7 @@ Position = collections.namedtuple('Position', ('x', 'y'))
 Display = collections.namedtuple('Display', ('geometry', 'position'))
 Window = collections.namedtuple('Window', ('did', 'title', 'geometry'))
 
-def get_geometry():
+def get_geometry(laptop):
     # This returns the current geometry, and will center the laptop display under the other one (if any)
     #
     # Clearly, there are a few assumptions here:
@@ -26,38 +26,69 @@ def get_geometry():
     x, y = 0, 0
     primary = None
     for line in xrandr.decode(encoding='UTF-8').splitlines():
-        m = re.match(r'^(?P<name>\S+) connected (?P<pri>primary )?'
-                     r'(?:(?P<w>\d+)x(?P<h>\d+)\+(?P<x>\d+)\+(?P<y>\d+))',
+        m = re.match(r'^(?P<name>\S+) (?P<state>(?:dis)?connected) (?P<pri>primary )?'
+                     r'(?:(?P<w>\d+)x(?P<h>\d+)\+(?P<x>\d+)\+(?P<y>\d+))?',
                      line)
         if not m:
             continue
         if m.group('pri'):
             name = 'laptop'
             primary = m.group('name')
-            x = int(m.group('x'))
-            y = int(m.group('y'))
+            if m.group('state') == 'connected':
+                try:
+                    x = int(m.group('x'))
+                    y = int(m.group('y'))
+                except TypeError:
+                    logging.error('no x: %s', line)
         else:
             name = 'monitor'
+        if m.group('state') == 'disconnected':
+            if m.group('w'):
+                logging.warning(f"display {m.group('name')} on but disconnected, turning off")
+                subprocess.check_output(['xrandr', '--output', m.group('name'), '--off'])
+                return None, None
+            continue
+        elif not m.group('w'):
+            logging.warning(f"display {m.group('name')} off but connected, turning on")
+            args = ['xrandr', '--output', m.group('name')]
+            if name == 'laptop':
+                args += ['--mode', laptop['mode'], '--primary']
+            else:
+                args += ['--auto', '--above', laptop['name']]
+            subprocess.check_output(args)
+            return None, None
         displays[name] = Display(geometry=Geometry(w=int(m.group('w')), h=int(m.group('h'))),
                                  position=Position(x=int(m.group('x')), y=int(m.group('y'))))
-    if len(displays) == 2:
+    if len(displays) == 0:
+        if laptop:
+            logging.warning(f"no displays, setting ${laptop['name']} to ${laptop['mode']}")
+            subprocess.check_output(['xrandr', '--output', laptop['name'], '--mode', laptop['mode'], '--primary'])
+        return None, None
+    elif len(displays) == 2:
         dx = (displays['monitor'].geometry.w - displays['laptop'].geometry.w) // 2
         dy = displays['monitor'].geometry.h
         if x != dx or y != dy:
             logging.info(f"centering primary display: {(x, y)} -> {(dx, dy)}")
             subprocess.call(('xrandr', '--output', primary, '--pos', f"{dx}x{dy}"),
                             stdout=sys.stdout, stderr=sys.stderr)
+            # the above takes a little time
+            return None, None
         return Geometry(w=displays['monitor'].geometry.w,
                         h=sum(map(lambda x: x.geometry.h, displays.values()))), displays
     else:
         # display position isn't updated right away somehow?
         name = list(displays.keys())[0]
+        if displays[name].position.x != 0 or displays[name].position.y != 0:
+            logging.debug(f"invalid {displays[name].position} for single monitor")
+            return None, None
         displays[name] = Display(geometry=displays[name].geometry,
                                  position=Position(x=0, y=0))
         return displays['laptop'].geometry, displays
 
 def get_config(config_path):
     config = yaml.load(open(config_path, 'r'), Loader=yaml.SafeLoader)
+    if 'primary' in config and ('name' not in config['primary'] or 'mode' not in config['primary']):
+        raise ValueError(f"invalid primary: {config['primary']}")
     rules = config.get('rules', [])
     for i in range(len(rules)):
         rules[i]['title'] = re.compile(rules[i]['title'])
@@ -133,7 +164,7 @@ def awmctrl(config_path, once):
             logging.warning(f"invalid configuration: {e}")
 
         try:
-            geometry, displays = get_geometry()
+            geometry, displays = get_geometry(config.get('primary'))
             if last != geometry and geometry in positions:
                 move = True
             else:
@@ -144,6 +175,9 @@ def awmctrl(config_path, once):
                 else:
                     logging.info(f"initial setup: {geometry}")
                 logging.debug(f"displays: {displays}")
+            if not geometry:
+                time.sleep(0.5)
+                continue
 
             new = {}
             wp = subprocess.check_output(('wmctrl', '-lG'))
@@ -180,7 +214,7 @@ def awmctrl(config_path, once):
                 for wid, window in new.items():
                     rule_window(wid, window, geometry, displays, config.get('rules', []))
 
-            now, _ = get_geometry()
+            now, _ = get_geometry(config.get('primary'))
             if now == geometry:
                 last = geometry
                 positions[last] = new
